@@ -283,7 +283,7 @@ bot.hears('ℹ️ Yordam', async (ctx) => {
 📊 Statistika:
 • "📊 Statistika" bo'limida shaxsiy va umumiy statistikani ko'rishingiz mumkin
 
-❓ Savollar bo'lsa: @youradmin (admin username ni o'zgartiring)`;
+❓ Savollar bo'lsa: @hallaym_admin ga murojaat qiling`;
     
     await ctx.reply(helpText);
 });
