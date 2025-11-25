@@ -1,7 +1,12 @@
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const mongoose = require('mongoose');
+const express = require('express');
 const fs = require('fs');
 const path = require('path');
+
+// Express app
+const app = express();
+app.use(express.json());
 
 // MongoDB ulanish
 async function connectDB() {
@@ -43,6 +48,9 @@ const Withdraw = mongoose.model('Withdraw', withdrawSchema);
 // Bot token
 const BOT_TOKEN = process.env.BOT_TOKEN || '7412314295:AAHYB804OToAPUQiC-b6Ma6doBtMCHETmQU';
 const bot = new Telegraf(BOT_TOKEN);
+
+// Bot username (global)
+let BOT_USERNAME;
 
 // Adminlar ro'yxati
 const ADMINS = [6606638731]; // Admin user ID larni qo'shing
@@ -132,7 +140,6 @@ function getAdminMenu() {
 bot.start(async (ctx) => {
     const user = await createUser(ctx);
     
-    const botInfo = await ctx.telegram.getMe();
     const welcomeText = `👋 Salom ${user.firstName}!
 
 🤝 Referral botimizga xush kelibsiz!
@@ -177,8 +184,7 @@ bot.hears('💸 Pul chiqarish', async (ctx) => {
 // Taklif qilish
 bot.hears('👥 Taklif qilish', async (ctx) => {
     const user = await User.findOne({ userId: ctx.from.id });
-    const botInfo = await ctx.telegram.getMe();
-    const referralLink = `https://t.me/${botInfo.username}?start=${user.userId}`;
+    const referralLink = `https://t.me/${BOT_USERNAME}?start=${user.userId}`;
     
     const referralText = `🤝 Do'stlaringizni taklif qiling va pul ishlang!
 
@@ -517,8 +523,8 @@ bot.on('callback_query', async (ctx) => {
 });
 
 // Foydalanuvchi ma'lumotlarini yangilash
-bot.on('message', async (ctx) => {
-    // Foydalanuvchi ma'lumotlarini yangilash (har qanday message da)
+bot.use(async (ctx, next) => {
+    // Foydalanuvchi ma'lumotlarini yangilash
     try {
         await User.findOneAndUpdate(
             { userId: ctx.from.id },
@@ -532,6 +538,7 @@ bot.on('message', async (ctx) => {
     } catch (error) {
         console.log('Foydalanuvchi ma\'lumotlarini yangilashda xato:', error);
     }
+    await next();
 });
 
 // Xatoliklarni qayta ishlash
@@ -547,13 +554,37 @@ async function startBot() {
     try {
         await connectDB();
         
-        // Botni ishga tushurish
-        await bot.launch();
-        console.log('✅ Bot muvaffaqiyatli ishga tushdi');
+        // Bot username olish
+        const botInfo = await bot.telegram.getMe();
+        BOT_USERNAME = botInfo.username;
+        
+        // Webhook sozlash (Render uchun)
+        const PORT = process.env.PORT || 3000;
+        const WEBHOOK_URL = `https://boter-x40u.onrender.com/${BOT_TOKEN}`;
+        await bot.telegram.setWebhook(WEBHOOK_URL);
+        
+        // Express webhook endpoint
+        app.post(`/${BOT_TOKEN}`, (req, res) => {
+            bot.handleUpdate(req.body);
+            res.sendStatus(200);
+        });
+        
+        // Server ishga tushirish
+        app.listen(PORT, () => {
+            console.log(`✅ Server ${PORT} portda ishga tushdi`);
+        });
+        
+        console.log('✅ Bot muvaffaqiyatli ishga tushdi (webhook rejimi)');
         
         // Graceful shutdown
-        process.once('SIGINT', () => bot.stop('SIGINT'));
-        process.once('SIGTERM', () => bot.stop('SIGTERM'));
+        process.once('SIGINT', () => {
+            bot.stop('SIGINT');
+            process.exit(0);
+        });
+        process.once('SIGTERM', () => {
+            bot.stop('SIGTERM');
+            process.exit(0);
+        });
         
     } catch (error) {
         console.error('Botni ishga tushirishda xato:', error);
@@ -564,4 +595,4 @@ async function startBot() {
 // Botni ishga tushurish
 startBot();
 
-module.exports = bot;
+module.exports = { app, bot };
