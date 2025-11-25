@@ -1,8 +1,8 @@
+require('dotenv').config();
+
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 
 // Express app
 const app = express();
@@ -11,7 +11,8 @@ app.use(express.json());
 // MongoDB ulanish
 async function connectDB() {
     try {
-        await mongoose.connect('mongodb+srv://apl:apl00@gamepaymentbot.ffcsj5v.mongodb.net/boter?retryWrites=true&w=majority');
+        const mongoUri = process.env.MONGODB_URI || 'mongodb+srv://apl:apl00@gamepaymentbot.ffcsj5v.mongodb.net/boter?retryWrites=true&w=majority';
+        await mongoose.connect(mongoUri);
         console.log('✅ MongoDB ga muvaffaqiyatli ulandı');
     } catch (error) {
         console.error('MongoDB ulanish xatosi:', error);
@@ -45,8 +46,12 @@ const withdrawSchema = new mongoose.Schema({
 
 const Withdraw = mongoose.model('Withdraw', withdrawSchema);
 
-// Bot token
-const BOT_TOKEN = process.env.BOT_TOKEN || '7412314295:AAHYB804OToAPUQiC-b6Ma6doBtMCHETmQU';
+// Bot token (env dan olish)
+const BOT_TOKEN = process.env.BOT_TOKEN;
+if (!BOT_TOKEN) {
+    console.error('❌ BOT_TOKEN env variable topilmadi!');
+    process.exit(1);
+}
 const bot = new Telegraf(BOT_TOKEN);
 
 // Bot username (global)
@@ -154,6 +159,9 @@ bot.start(async (ctx) => {
 // Mening balansim
 bot.hears('💰 Mening balansim', async (ctx) => {
     const user = await User.findOne({ userId: ctx.from.id });
+    if (!user) {
+        return ctx.reply('❌ Foydalanuvchi topilmadi. /start buyrug\'ini yuboring.');
+    }
     
     const balanceText = `💳 Sizning balansingiz: ${user.balance} so'm
 
@@ -168,6 +176,9 @@ bot.hears('💰 Mening balansim', async (ctx) => {
 // Pul chiqarish
 bot.hears('💸 Pul chiqarish', async (ctx) => {
     const user = await User.findOne({ userId: ctx.from.id });
+    if (!user) {
+        return ctx.reply('❌ Foydalanuvchi topilmadi. /start buyrug\'ini yuboring.');
+    }
     
     if (user.balance < 10000) {
         return ctx.reply(`❌ Balansingiz yetarli emas! Minimal chiqarish miqdori: 10000 so'm\nSizning balans: ${user.balance} so'm`);
@@ -184,6 +195,9 @@ bot.hears('💸 Pul chiqarish', async (ctx) => {
 // Taklif qilish
 bot.hears('👥 Taklif qilish', async (ctx) => {
     const user = await User.findOne({ userId: ctx.from.id });
+    if (!user) {
+        return ctx.reply('❌ Foydalanuvchi topilmadi. /start buyrug\'ini yuboring.');
+    }
     const referralLink = `https://t.me/${BOT_USERNAME}?start=${user.userId}`;
     
     const referralText = `🤝 Do'stlaringizni taklif qiling va pul ishlang!
@@ -209,6 +223,9 @@ ${referralLink}
 // Statistika
 bot.hears('📊 Statistika', async (ctx) => {
     const user = await User.findOne({ userId: ctx.from.id });
+    if (!user) {
+        return ctx.reply('❌ Foydalanuvchi topilmadi. /start buyrug\'ini yuboring.');
+    }
     const totalUsers = await User.countDocuments();
     
     const statsText = `📊 Sizning statistikangiz:
@@ -236,13 +253,13 @@ bot.hears('🏆 Top reyting', async (ctx) => {
     
     let ratingText = '🏆 TOP 10 - Eng ko\'p taklif qilgan foydalanuvchilar:\n\n';
     
-    topUsers.forEach((user, index) => {
-        const name = user.firstName || user.username || 'Foydalanuvchi';
-        ratingText += `${index + 1}. ${name} - ${user.referralCount} ta taklif (${user.totalEarned} so'm)\n`;
-    });
-    
     if (topUsers.length === 0) {
         ratingText += 'Hali hech kim yo\'q.';
+    } else {
+        topUsers.forEach((user, index) => {
+            const name = user.firstName || user.username || 'Foydalanuvchi';
+            ratingText += `${index + 1}. ${name} - ${user.referralCount} ta taklif (${user.totalEarned} so'm)\n`;
+        });
     }
     
     await ctx.reply(ratingText);
@@ -418,13 +435,35 @@ bot.hears('📢 E\'lon yuborish', (ctx) => {
     ctx.scene.enter('broadcast');
 });
 
-// Text handler (withdraw uchun)
+// Foydalanuvchi ma'lumotlarini yangilash middleware (eng boshida)
+bot.use(async (ctx, next) => {
+    if (ctx.from) {
+        try {
+            await User.findOneAndUpdate(
+                { userId: ctx.from.id },
+                {
+                    username: ctx.from.username,
+                    firstName: ctx.from.first_name,
+                    lastName: ctx.from.last_name
+                },
+                { upsert: true }
+            );
+        } catch (error) {
+            console.log('Foydalanuvchi ma\'lumotlarini yangilashda xato:', error);
+        }
+    }
+    await next();
+});
+
+// Text handler (withdraw uchun) - session step borligini tekshirish
 bot.on('text', async (ctx) => {
     const step = ctx.session?.withdrawStep;
-    if (!step) return; // Boshqa textlarni ignore
+    if (!step) return; // Boshqa textlarni ignore qilish (admin hears oldinroq)
     
     const user = await User.findOne({ userId: ctx.from.id });
-    if (!user) return;
+    if (!user) {
+        return ctx.reply('❌ Foydalanuvchi topilmadi. /start buyrug\'ini yuboring.');
+    }
     
     if (step === 'amount') {
         const amount = parseInt(ctx.message.text);
@@ -515,30 +554,15 @@ bot.on('callback_query', async (ctx) => {
             `Tabriklaymiz! ${withdraw.amount} so'm ${withdraw.cardNumber.slice(0,4)}****${withdraw.cardNumber.slice(-4)} kartasiga o'tkazildi!` :
             `Kechirasiz, so'rovingiz rad etildi. Iltimos, admin bilan bog'laning.`;
         
-        await ctx.telegram.sendMessage(user.userId, `${statusEmoji} ${statusText}`);
+        try {
+            await ctx.telegram.sendMessage(user.userId, `${statusEmoji} ${statusText}`);
+        } catch (error) {
+            console.log('Foydalanuvchiga xabar yuborishda xato:', error);
+        }
         
         await ctx.answerCbQuery(`${action === 'approved' ? 'Tasdiqlandi' : 'Rad etildi'}!`);
         await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Tugmalarni olib tashlash
     }
-});
-
-// Foydalanuvchi ma'lumotlarini yangilash
-bot.use(async (ctx, next) => {
-    // Foydalanuvchi ma'lumotlarini yangilash
-    try {
-        await User.findOneAndUpdate(
-            { userId: ctx.from.id },
-            {
-                username: ctx.from.username,
-                firstName: ctx.from.first_name,
-                lastName: ctx.from.last_name
-            },
-            { upsert: true }
-        );
-    } catch (error) {
-        console.log('Foydalanuvchi ma\'lumotlarini yangilashda xato:', error);
-    }
-    await next();
 });
 
 // Xatoliklarni qayta ishlash
@@ -557,16 +581,23 @@ async function startBot() {
         // Bot username olish
         const botInfo = await bot.telegram.getMe();
         BOT_USERNAME = botInfo.username;
+        console.log(`✅ Bot username: @${BOT_USERNAME}`);
         
         // Webhook sozlash (Render uchun)
         const PORT = process.env.PORT || 3000;
         const WEBHOOK_URL = `https://boter-x40u.onrender.com/${BOT_TOKEN}`;
         await bot.telegram.setWebhook(WEBHOOK_URL);
+        console.log(`✅ Webhook set qilindi: ${WEBHOOK_URL}`);
         
         // Express webhook endpoint
         app.post(`/${BOT_TOKEN}`, (req, res) => {
             bot.handleUpdate(req.body);
             res.sendStatus(200);
+        });
+        
+        // Health check endpoint
+        app.get('/', (req, res) => {
+            res.send(`Bot ishlamoqda! Username: @${BOT_USERNAME}`);
         });
         
         // Server ishga tushirish
